@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Minimalist Scheduler</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Firebase SDKs (Compat version for simpler vanilla JS setup) -->
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f9f9f9; }
+        
+        /* Collapsible Header Transition */
+        #header { transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); }
+        .header-collapsed { padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); }
+        .header-collapsed h1 { font-size: 1.2rem !important; }
+
+        /* Dynamic Island Reminder */
+        .dynamic-island {
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            white-space: nowrap;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+        }
+        .dynamic-island.expanded {
+            width: 150px;
+            border-radius: 20px;
+            padding: 0 12px;
+        }
+        .dynamic-island .reminder-text {
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            margin-left: 8px;
+            font-size: 0.8rem;
+        }
+        .dynamic-island.expanded .reminder-text {
+            opacity: 1;
+        }
+
+        /* Drag Handle */
+        .drag-handle {
+            width: 12px;
+            height: 12px;
+            background-color: rgba(0,0,0,0.15);
+            border-radius: 50%;
+            position: absolute;
+            bottom: -6px;
+            left: 50%;
+            transform: translateX(-50%);
+            cursor: ns-resize;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        }
+
+        /* Task States */
+        .task-completed { text-decoration: line-through; opacity: 0.6; }
+        .task-failed { background-color: #e5e7eb !important; color: #6b7280; text-decoration: line-through; }
+
+        /* Modal Overlay */
+        #modal-overlay { backdrop-filter: blur(4px); }
+    </style>
+</head>
+<body class="text-gray-800 antialiased h-screen flex flex-col overflow-hidden">
+
+    <!-- Collapsible Header -->
+    <header id="header" class="bg-white px-4 pt-8 pb-4 sticky top-0 z-20 rounded-b-3xl">
+        <div class="flex justify-between items-center mb-4 header-title-container">
+            <h1 class="text-3xl font-bold tracking-tight">Today</h1>
+            <button onclick="toggleSpecialDayUI()" class="bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full text-sm font-medium">✨ Special Day</button>
+        </div>
+
+        <!-- Special Day Input (Hidden by default) -->
+        <div id="special-day-ui" class="hidden mb-4 flex gap-2">
+            <input type="text" id="special-day-name" placeholder="Name this day (e.g. Holiday)" class="flex-1 bg-gray-100 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200">
+            <button onclick="saveSpecialDay()" class="bg-indigo-600 text-white rounded-xl px-4 py-2 text-sm font-medium">Save</button>
+        </div>
+
+        <!-- Date Selector -->
+        <div class="flex gap-4 overflow-x-auto pb-2 scrollbar-hide" id="date-selector">
+            <!-- Populated by JS -->
+        </div>
+    </header>
+
+    <!-- Timetable Scrollable Area -->
+    <main class="flex-1 overflow-y-auto px-4 py-6 relative" id="timetable-container">
+        <!-- 9:00 AM Example -->
+        <div class="flex mb-8 min-h-[60px] group">
+            <div class="w-16 text-xs text-gray-400 font-medium pt-2 text-right pr-4">9 AM</div>
+            <div class="flex-1 border-t border-gray-100 pt-2 relative flex gap-2">
+                
+                <!-- The Main Task Block -->
+                <div class="flex-1 bg-blue-100 rounded-2xl p-3 relative shadow-sm cursor-pointer" onclick="openTaskOptions('task-1')">
+                    <p class="font-medium text-blue-900 text-sm" id="task-1-text">Design Landing Page</p>
+                    <div class="drag-handle"></div>
+                </div>
+
+                <!-- The Dynamic Island Reminder -->
+                <div class="w-10 h-10 bg-black rounded-full dynamic-island flex-shrink-0 cursor-pointer shadow-lg" onclick="toggleReminder(this)">
+                    <div class="w-10 h-10 flex items-center justify-center flex-shrink-0 text-white">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    </div>
+                    <span class="reminder-text text-white font-medium">Drink Water</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 10:00 AM Example -->
+        <div class="flex mb-8 min-h-[60px] group">
+            <div class="w-16 text-xs text-gray-400 font-medium pt-2 text-right pr-4">10 AM</div>
+            <div class="flex-1 border-t border-gray-100 pt-2 relative flex gap-2">
+                <div class="flex-1 bg-pink-100 rounded-2xl p-3 relative shadow-sm cursor-pointer" onclick="openTaskOptions('task-2')">
+                    <p class="font-medium text-pink-900 text-sm" id="task-2-text">Team Sync Meeting</p>
+                    <div class="drag-handle"></div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Task Options Modal (Failed / Reschedule / Complete) -->
+    <div id="modal-overlay" class="fixed inset-0 bg-black/20 z-40 hidden opacity-0 transition-opacity flex items-end sm:items-center justify-center" onclick="closeModal(event)">
+        <div class="bg-white w-full sm:w-96 rounded-t-3xl sm:rounded-3xl p-6 transform translate-y-full sm:translate-y-0 transition-transform duration-300" id="modal-content" onclick="event.stopPropagation()">
+            <h3 class="text-lg font-bold mb-4">Task Options</h3>
+            <div class="flex flex-col gap-3">
+                <button onclick="markCompleted()" class="w-full bg-green-500 text-white rounded-xl py-3 font-medium flex justify-center items-center gap-2">
+                    ✓ Mark as Completed
+                </button>
+                <button onclick="markFailed()" class="w-full bg-gray-200 text-gray-700 rounded-xl py-3 font-medium">
+                    ✕ Mark as Failed
+                </button>
+                <button onclick="reschedule()" class="w-full border-2 border-gray-200 text-gray-700 rounded-xl py-3 font-medium">
+                    🗓 Reschedule
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. Dynamic Island Reminder Logic ---
+        function toggleReminder(element) {
+            element.classList.toggle('expanded');
+            // Close after 4 seconds automatically
+            if(element.classList.contains('expanded')) {
+                setTimeout(() => { element.classList.remove('expanded'); }, 4000);
+            }
+        }
+
+        // --- 2. Collapsible Header Logic ---
+        const timetable = document.getElementById('timetable-container');
+        const header = document.getElementById('header');
+        timetable.addEventListener('scroll', () => {
+            if (timetable.scrollTop > 20) {
+                header.classList.add('header-collapsed');
+            } else {
+                header.classList.remove('header-collapsed');
+            }
+        });
+
+        // --- 3. Special Day Logic ---
+        function toggleSpecialDayUI() {
+            const ui = document.getElementById('special-day-ui');
+            ui.classList.toggle('hidden');
+        }
+        function saveSpecialDay() {
+            const name = document.getElementById('special-day-name').value;
+            if(name) {
+                alert(`Special Day Saved: ${name}`);
+                toggleSpecialDayUI();
+                // Add highlight to current date in selector visually
+                document.getElementById('date-1').classList.add('bg-indigo-100', 'border-indigo-300');
+            }
+        }
+
+        // --- 4. Modal Logic (Fail/Complete/Reschedule) ---
+        let currentActiveTask = null;
+        
+        function openTaskOptions(taskId) {
+            currentActiveTask = taskId;
+            const overlay = document.getElementById('modal-overlay');
+            const content = document.getElementById('modal-content');
+            overlay.classList.remove('hidden');
+            setTimeout(() => {
+                overlay.classList.remove('opacity-0');
+                content.classList.remove('translate-y-full');
+            }, 10);
+        }
+
+        function closeModal(e) {
+            const overlay = document.getElementById('modal-overlay');
+            const content = document.getElementById('modal-content');
+            overlay.classList.add('opacity-0');
+            content.classList.add('translate-y-full');
+            setTimeout(() => { overlay.classList.add('hidden'); }, 300);
+        }
+
+        function markCompleted() {
+            const task = document.getElementById(currentActiveTask + '-text').parentElement;
+            task.classList.add('task-completed');
+            closeModal();
+        }
+
+        function markFailed() {
+            const task = document.getElementById(currentActiveTask + '-text').parentElement;
+            task.className = "flex-1 rounded-2xl p-3 relative shadow-sm cursor-pointer task-failed"; 
+            closeModal();
+        }
+
+        function reschedule() {
+            alert("Reschedule date picker would open here.");
+            markFailed(); // Usually rescheduled tasks are grayed out on the current day
+        }
+
+        // --- 5. Generate Dates ---
+        const dateSelector = document.getElementById('date-selector');
+        for (let i = 0; i < 7; i++) {
+            const dateStr = i === 0 ? "Today" : `Oct ${18 + i}`;
+            const activeClass = i === 0 ? "bg-black text-white" : "bg-white text-gray-500 border border-gray-200";
+            dateSelector.innerHTML += `
+                <div id="date-${i+1}" class="flex flex-col items-center justify-center min-w-[60px] h-16 rounded-2xl cursor-pointer ${activeClass}">
+                    <span class="text-xs font-medium">${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][i%7]}</span>
+                    <span class="text-lg font-bold">${18+i}</span>
+                </div>
+            `;
+        }
+
+        // --- 6. Firebase Configuration (PLACEHOLDER) ---
+    
+        const firebaseConfig = {
+            apiKey: "AIzaSyCokEpZQM1X9k_CNZuV8IwcmZWMA_ooMTU",
+            authDomain: "time-table-e81d5.firebaseapp.com",
+            projectId: "time-table-e81d5",
+            storageBucket: "time-table-e81d5.firebasestorage.app",
+            messagingSenderId: "328134234207",
+            appId: "1:328134234207:web:51bf5a831655c33e380bea"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+       
+    </script>
+</body>
+</html>
