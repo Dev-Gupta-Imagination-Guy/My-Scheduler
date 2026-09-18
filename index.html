@@ -1,241 +1,679 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Minimalist Scheduler</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Firebase SDKs (Compat version for simpler vanilla JS setup) -->
-    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f9f9f9; }
-        
-        /* Collapsible Header Transition */
-        #header { transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); }
-        .header-collapsed { padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); }
-        .header-collapsed h1 { font-size: 1.2rem !important; }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Minimalist Scheduler</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  :root{ --row-h: 64px; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f9f9f9; }
 
-        /* Dynamic Island Reminder */
-        .dynamic-island {
-            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-            white-space: nowrap;
-            overflow: hidden;
-            display: flex;
-            align-items: center;
-        }
-        .dynamic-island.expanded {
-            width: 150px;
-            border-radius: 20px;
-            padding: 0 12px;
-        }
-        .dynamic-island .reminder-text {
-            opacity: 0;
-            transition: opacity 0.3s ease;
-            margin-left: 8px;
-            font-size: 0.8rem;
-        }
-        .dynamic-island.expanded .reminder-text {
-            opacity: 1;
-        }
+  /* Collapsible header */
+  #header { transition: padding 0.3s cubic-bezier(0.25,0.8,0.25,1), box-shadow 0.3s ease; }
+  .header-collapsed { padding-top: 0.6rem !important; padding-bottom: 0.6rem !important; box-shadow: 0 4px 10px -4px rgba(0,0,0,0.08); }
+  .header-collapsed #header-title { font-size: 1.15rem !important; }
+  .header-collapsed #date-selector { transform: scale(0.94); transform-origin: left top; }
 
-        /* Drag Handle */
-        .drag-handle {
-            width: 12px;
-            height: 12px;
-            background-color: rgba(0,0,0,0.15);
-            border-radius: 50%;
-            position: absolute;
-            bottom: -6px;
-            left: 50%;
-            transform: translateX(-50%);
-            cursor: ns-resize;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-        }
+  /* Hide scrollbars on the date rail without hiding functionality */
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
 
-        /* Task States */
-        .task-completed { text-decoration: line-through; opacity: 0.6; }
-        .task-failed { background-color: #e5e7eb !important; color: #6b7280; text-decoration: line-through; }
+  /* Dynamic Island reminder */
+  .dynamic-island {
+    transition: width 0.35s cubic-bezier(0.175,0.885,0.32,1.275), border-radius 0.35s ease, padding 0.35s ease;
+    white-space: nowrap; overflow: hidden; display: flex; align-items: center;
+  }
+  .dynamic-island.expanded { width: 148px; border-radius: 20px; padding: 0 12px; }
+  .dynamic-island .reminder-text { opacity: 0; transition: opacity 0.25s ease 0.05s; margin-left: 8px; font-size: 0.78rem; }
+  .dynamic-island.expanded .reminder-text { opacity: 1; }
 
-        /* Modal Overlay */
-        #modal-overlay { backdrop-filter: blur(4px); }
-    </style>
+  /* Drag / resize handle */
+  .drag-handle {
+    width: 28px; height: 14px; display: flex; align-items: center; justify-content: center;
+    position: absolute; bottom: -7px; left: 50%; transform: translateX(-50%);
+    cursor: ns-resize; touch-action: none;
+  }
+  .drag-handle::after {
+    content: ""; width: 22px; height: 5px; border-radius: 999px;
+    background: rgba(0,0,0,0.18); box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+  }
+  .drag-handle:hover::after, .drag-handle:focus-visible::after { background: rgba(0,0,0,0.32); }
+  .drag-handle:focus-visible { outline: 2px solid #4f46e5; outline-offset: 2px; border-radius: 6px; }
+
+  .task-card { position: absolute; left: 0; right: 56px; transition: box-shadow 0.15s ease; }
+  .task-card.resizing { transition: none; box-shadow: 0 8px 20px -6px rgba(0,0,0,0.25); z-index: 30; }
+  .task-completed { text-decoration: line-through; opacity: 0.55; }
+  .task-failed { background-color: #e5e7eb !important; color: #6b7280 !important; text-decoration: line-through; }
+  .task-failed .task-time { color: #9ca3af !important; }
+
+  #modal-overlay { backdrop-filter: blur(4px); }
+  .toast { transition: opacity 0.25s ease, transform 0.25s ease; }
+
+  *:focus-visible { outline: 2px solid #4f46e5; outline-offset: 2px; }
+</style>
 </head>
 <body class="text-gray-800 antialiased h-screen flex flex-col overflow-hidden">
 
-    <!-- Collapsible Header -->
-    <header id="header" class="bg-white px-4 pt-8 pb-4 sticky top-0 z-20 rounded-b-3xl">
-        <div class="flex justify-between items-center mb-4 header-title-container">
-            <h1 class="text-3xl font-bold tracking-tight">Today</h1>
-            <button onclick="toggleSpecialDayUI()" class="bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full text-sm font-medium">✨ Special Day</button>
-        </div>
+<!-- Header -->
+<header id="header" class="bg-white px-4 pt-8 pb-4 sticky top-0 z-20 rounded-b-3xl">
+  <div class="flex justify-between items-center mb-4">
+    <h1 id="header-title" class="text-3xl font-bold tracking-tight transition-all">Today</h1>
+    <div class="flex items-center gap-2">
+      <button id="special-day-btn" class="bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-full text-sm font-medium" aria-haspopup="true" aria-expanded="false">
+        ✨ Special Day
+      </button>
+      <button id="add-task-btn" class="bg-black text-white w-9 h-9 rounded-full text-lg font-medium flex items-center justify-center leading-none" aria-label="Add task">+</button>
+    </div>
+  </div>
 
-        <!-- Special Day Input (Hidden by default) -->
-        <div id="special-day-ui" class="hidden mb-4 flex gap-2">
-            <input type="text" id="special-day-name" placeholder="Name this day (e.g. Holiday)" class="flex-1 bg-gray-100 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200">
-            <button onclick="saveSpecialDay()" class="bg-indigo-600 text-white rounded-xl px-4 py-2 text-sm font-medium">Save</button>
-        </div>
+  <div id="special-day-ui" class="hidden mb-4 flex gap-2">
+    <input type="text" id="special-day-name" placeholder="Name this day (e.g. Holiday)" maxlength="24"
+      class="flex-1 bg-gray-100 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200" />
+    <button id="special-day-save" class="bg-indigo-600 text-white rounded-xl px-4 py-2 text-sm font-medium">Save</button>
+    <button id="special-day-clear" class="text-gray-400 rounded-xl px-3 py-2 text-sm font-medium">Clear</button>
+  </div>
 
-        <!-- Date Selector -->
-        <div class="flex gap-4 overflow-x-auto pb-2 scrollbar-hide" id="date-selector">
-            <!-- Populated by JS -->
-        </div>
-    </header>
+  <div class="flex gap-3 overflow-x-auto pb-2 no-scrollbar" id="date-selector" role="tablist" aria-label="Choose a day"></div>
+</header>
 
-    <!-- Timetable Scrollable Area -->
-    <main class="flex-1 overflow-y-auto px-4 py-6 relative" id="timetable-container">
-        <!-- 9:00 AM Example -->
-        <div class="flex mb-8 min-h-[60px] group">
-            <div class="w-16 text-xs text-gray-400 font-medium pt-2 text-right pr-4">9 AM</div>
-            <div class="flex-1 border-t border-gray-100 pt-2 relative flex gap-2">
-                
-                <!-- The Main Task Block -->
-                <div class="flex-1 bg-blue-100 rounded-2xl p-3 relative shadow-sm cursor-pointer" onclick="openTaskOptions('task-1')">
-                    <p class="font-medium text-blue-900 text-sm" id="task-1-text">Design Landing Page</p>
-                    <div class="drag-handle"></div>
-                </div>
+<!-- Timetable -->
+<main class="flex-1 overflow-y-auto px-4 py-6 relative" id="timetable-container">
+  <div class="flex">
+    <div class="w-14 flex-shrink-0" id="hour-labels"></div>
+    <div class="flex-1 relative" id="timetable-grid"></div>
+  </div>
+  <p id="empty-state" class="hidden text-center text-sm text-gray-400 mt-10">No tasks yet — tap + to add one.</p>
+</main>
 
-                <!-- The Dynamic Island Reminder -->
-                <div class="w-10 h-10 bg-black rounded-full dynamic-island flex-shrink-0 cursor-pointer shadow-lg" onclick="toggleReminder(this)">
-                    <div class="w-10 h-10 flex items-center justify-center flex-shrink-0 text-white">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                    </div>
-                    <span class="reminder-text text-white font-medium">Drink Water</span>
-                </div>
-            </div>
-        </div>
+<!-- Task options modal -->
+<div id="modal-overlay" class="fixed inset-0 bg-black/20 z-40 hidden opacity-0 transition-opacity duration-200 flex items-end sm:items-center justify-center">
+  <div class="bg-white w-full sm:w-96 rounded-t-3xl sm:rounded-3xl p-6 transform translate-y-full sm:translate-y-0 transition-transform duration-300" id="modal-content">
+    <h3 id="modal-title" class="text-lg font-bold mb-1">Task Options</h3>
+    <p id="modal-subtitle" class="text-sm text-gray-400 mb-4"></p>
 
-        <!-- 10:00 AM Example -->
-        <div class="flex mb-8 min-h-[60px] group">
-            <div class="w-16 text-xs text-gray-400 font-medium pt-2 text-right pr-4">10 AM</div>
-            <div class="flex-1 border-t border-gray-100 pt-2 relative flex gap-2">
-                <div class="flex-1 bg-pink-100 rounded-2xl p-3 relative shadow-sm cursor-pointer" onclick="openTaskOptions('task-2')">
-                    <p class="font-medium text-pink-900 text-sm" id="task-2-text">Team Sync Meeting</p>
-                    <div class="drag-handle"></div>
-                </div>
-            </div>
-        </div>
-    </main>
-
-    <!-- Task Options Modal (Failed / Reschedule / Complete) -->
-    <div id="modal-overlay" class="fixed inset-0 bg-black/20 z-40 hidden opacity-0 transition-opacity flex items-end sm:items-center justify-center" onclick="closeModal(event)">
-        <div class="bg-white w-full sm:w-96 rounded-t-3xl sm:rounded-3xl p-6 transform translate-y-full sm:translate-y-0 transition-transform duration-300" id="modal-content" onclick="event.stopPropagation()">
-            <h3 class="text-lg font-bold mb-4">Task Options</h3>
-            <div class="flex flex-col gap-3">
-                <button onclick="markCompleted()" class="w-full bg-green-500 text-white rounded-xl py-3 font-medium flex justify-center items-center gap-2">
-                    ✓ Mark as Completed
-                </button>
-                <button onclick="markFailed()" class="w-full bg-gray-200 text-gray-700 rounded-xl py-3 font-medium">
-                    ✕ Mark as Failed
-                </button>
-                <button onclick="reschedule()" class="w-full border-2 border-gray-200 text-gray-700 rounded-xl py-3 font-medium">
-                    🗓 Reschedule
-                </button>
-            </div>
-        </div>
+    <div id="modal-actions" class="flex flex-col gap-3">
+      <button data-action="complete" class="w-full bg-green-500 text-white rounded-xl py-3 font-medium">✓ Mark as Completed</button>
+      <button data-action="fail" class="w-full bg-gray-200 text-gray-700 rounded-xl py-3 font-medium">✕ Mark as Failed</button>
+      <button data-action="reschedule" class="w-full border-2 border-gray-200 text-gray-700 rounded-xl py-3 font-medium">🗓 Reschedule</button>
+      <button data-action="delete" class="w-full text-red-500 text-sm font-medium py-1">Delete task</button>
     </div>
 
-    <script>
-        // --- 1. Dynamic Island Reminder Logic ---
-        function toggleReminder(element) {
-            element.classList.toggle('expanded');
-            // Close after 4 seconds automatically
-            if(element.classList.contains('expanded')) {
-                setTimeout(() => { element.classList.remove('expanded'); }, 4000);
-            }
-        }
+    <div id="reschedule-panel" class="hidden flex-col gap-3">
+      <label class="text-sm text-gray-500" for="reschedule-date">Move to date</label>
+      <input type="date" id="reschedule-date" class="bg-gray-100 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200" />
+      <div class="flex gap-2 mt-1">
+        <button data-action="reschedule-confirm" class="flex-1 bg-indigo-600 text-white rounded-xl py-3 font-medium">Move task</button>
+        <button data-action="reschedule-cancel" class="flex-1 border-2 border-gray-200 text-gray-700 rounded-xl py-3 font-medium">Back</button>
+      </div>
+    </div>
 
-        // --- 2. Collapsible Header Logic ---
-        const timetable = document.getElementById('timetable-container');
-        const header = document.getElementById('header');
-        timetable.addEventListener('scroll', () => {
-            if (timetable.scrollTop > 20) {
-                header.classList.add('header-collapsed');
-            } else {
-                header.classList.remove('header-collapsed');
-            }
-        });
+    <button data-action="close" class="w-full text-gray-400 text-sm font-medium py-2 mt-1">Cancel</button>
+  </div>
+</div>
 
-        // --- 3. Special Day Logic ---
-        function toggleSpecialDayUI() {
-            const ui = document.getElementById('special-day-ui');
-            ui.classList.toggle('hidden');
-        }
-        function saveSpecialDay() {
-            const name = document.getElementById('special-day-name').value;
-            if(name) {
-                alert(`Special Day Saved: ${name}`);
-                toggleSpecialDayUI();
-                // Add highlight to current date in selector visually
-                document.getElementById('date-1').classList.add('bg-indigo-100', 'border-indigo-300');
-            }
-        }
+<!-- Add task modal -->
+<div id="add-overlay" class="fixed inset-0 bg-black/20 z-40 hidden opacity-0 transition-opacity duration-200 flex items-end sm:items-center justify-center">
+  <div class="bg-white w-full sm:w-96 rounded-t-3xl sm:rounded-3xl p-6 transform translate-y-full sm:translate-y-0 transition-transform duration-300" id="add-content">
+    <h3 class="text-lg font-bold mb-4">New Task</h3>
+    <div class="flex flex-col gap-3">
+      <input id="new-title" type="text" placeholder="Task title" maxlength="60"
+        class="bg-gray-100 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200" />
 
-        // --- 4. Modal Logic (Fail/Complete/Reschedule) ---
-        let currentActiveTask = null;
-        
-        function openTaskOptions(taskId) {
-            currentActiveTask = taskId;
-            const overlay = document.getElementById('modal-overlay');
-            const content = document.getElementById('modal-content');
-            overlay.classList.remove('hidden');
-            setTimeout(() => {
-                overlay.classList.remove('opacity-0');
-                content.classList.remove('translate-y-full');
-            }, 10);
-        }
+      <div class="flex gap-2">
+        <select id="new-hour" class="flex-1 bg-gray-100 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"></select>
+        <select id="new-duration" class="flex-1 bg-gray-100 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200">
+          <option value="1">1 hour</option>
+          <option value="2">2 hours</option>
+          <option value="3">3 hours</option>
+          <option value="4">4 hours</option>
+        </select>
+      </div>
 
-        function closeModal(e) {
-            const overlay = document.getElementById('modal-overlay');
-            const content = document.getElementById('modal-content');
-            overlay.classList.add('opacity-0');
-            content.classList.add('translate-y-full');
-            setTimeout(() => { overlay.classList.add('hidden'); }, 300);
-        }
+      <div class="flex gap-2" id="color-picker">
+        <button data-color="blue" class="color-swatch w-8 h-8 rounded-full bg-blue-200 ring-2 ring-offset-2 ring-blue-400" aria-label="Blue"></button>
+        <button data-color="pink" class="color-swatch w-8 h-8 rounded-full bg-pink-200" aria-label="Pink"></button>
+        <button data-color="indigo" class="color-swatch w-8 h-8 rounded-full bg-indigo-200" aria-label="Indigo"></button>
+      </div>
 
-        function markCompleted() {
-            const task = document.getElementById(currentActiveTask + '-text').parentElement;
-            task.classList.add('task-completed');
-            closeModal();
-        }
+      <input id="new-reminder" type="text" placeholder="Reminder (optional, e.g. Drink Water)" maxlength="30"
+        class="bg-gray-100 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200" />
 
-        function markFailed() {
-            const task = document.getElementById(currentActiveTask + '-text').parentElement;
-            task.className = "flex-1 rounded-2xl p-3 relative shadow-sm cursor-pointer task-failed"; 
-            closeModal();
-        }
+      <div class="flex gap-2 mt-1">
+        <button id="add-save" class="flex-1 bg-black text-white rounded-xl py-3 font-medium">Add Task</button>
+        <button id="add-cancel" class="flex-1 border-2 border-gray-200 text-gray-700 rounded-xl py-3 font-medium">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
 
-        function reschedule() {
-            alert("Reschedule date picker would open here.");
-            markFailed(); // Usually rescheduled tasks are grayed out on the current day
-        }
+<div id="toast" class="toast fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-sm px-4 py-2 rounded-full opacity-0 pointer-events-none z-50"></div>
 
-        // --- 5. Generate Dates ---
-        const dateSelector = document.getElementById('date-selector');
-        for (let i = 0; i < 7; i++) {
-            const dateStr = i === 0 ? "Today" : `Oct ${18 + i}`;
-            const activeClass = i === 0 ? "bg-black text-white" : "bg-white text-gray-500 border border-gray-200";
-            dateSelector.innerHTML += `
-                <div id="date-${i+1}" class="flex flex-col items-center justify-center min-w-[60px] h-16 rounded-2xl cursor-pointer ${activeClass}">
-                    <span class="text-xs font-medium">${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][i%7]}</span>
-                    <span class="text-lg font-bold">${18+i}</span>
-                </div>
-            `;
-        }
+<script>
+(function () {
+  "use strict";
 
-        // --- 6. Firebase Configuration (PLACEHOLDER) ---
-    
-        const firebaseConfig = {
-            apiKey: "AIzaSyCokEpZQM1X9k_CNZuV8IwcmZWMA_ooMTU",
-            authDomain: "time-table-e81d5.firebaseapp.com",
-            projectId: "time-table-e81d5",
-            storageBucket: "time-table-e81d5.firebasestorage.app",
-            messagingSenderId: "328134234207",
-            appId: "1:328134234207:web:51bf5a831655c33e380bea"
-        };
-        firebase.initializeApp(firebaseConfig);
-        const db = firebase.firestore();
-       
-    </script>
+  // ---------- Config ----------
+  const START_HOUR = 6;   // 6 AM
+  const END_HOUR = 22;    // last row start = 10 PM (tasks may run to 11 PM)
+  const ROW_H = 64;       // px, matches --row-h
+  const STORAGE_KEY = "minimalist-scheduler:v1";
+  const COLORS = {
+    blue:   { bg: "bg-blue-100",   text: "text-blue-900",   ring: "ring-blue-400" },
+    pink:   { bg: "bg-pink-100",   text: "text-pink-900",   ring: "ring-pink-400" },
+    indigo: { bg: "bg-indigo-100", text: "text-indigo-900", ring: "ring-indigo-400" }
+  };
+
+  // ---------- State ----------
+  let state = loadState();
+  let selectedDate = dateKey(new Date());
+  let activeTaskId = null;
+
+  function defaultState() {
+    const todayKey = dateKey(new Date());
+    return {
+      tasks: {
+        [todayKey]: [
+          { id: uid(), hour: 9, duration: 1, title: "Design Landing Page", color: "blue", reminder: "Drink Water", status: "pending" },
+          { id: uid(), hour: 10, duration: 1, title: "Team Sync Meeting", color: "pink", reminder: "", status: "pending" }
+        ]
+      },
+      specialDays: {}
+    };
+  }
+
+  function loadState() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return defaultState();
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || !parsed.tasks) return defaultState();
+      return parsed;
+    } catch (err) {
+      console.warn("Could not read saved schedule, starting fresh.", err);
+      return defaultState();
+    }
+  }
+
+  function saveState() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch (err) {
+      console.warn("Could not save schedule (storage may be full or blocked).", err);
+      showToast("Couldn't save — storage unavailable");
+    }
+  }
+
+  function uid() {
+    return "t" + Math.random().toString(36).slice(2, 10);
+  }
+
+  function dateKey(d) {
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  }
+
+  function tasksFor(key) {
+    if (!state.tasks[key]) state.tasks[key] = [];
+    return state.tasks[key];
+  }
+
+  // ---------- Toast ----------
+  let toastTimer = null;
+  function showToast(msg) {
+    const el = document.getElementById("toast");
+    el.textContent = msg;
+    el.classList.remove("opacity-0");
+    el.classList.add("opacity-100");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      el.classList.remove("opacity-100");
+      el.classList.add("opacity-0");
+    }, 2200);
+  }
+
+  // ---------- Date selector ----------
+  const dateSelector = document.getElementById("date-selector");
+  const headerTitle = document.getElementById("header-title");
+
+  function renderDateSelector() {
+    dateSelector.innerHTML = "";
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(today);
+      d.setDate(today.getDate() + i);
+      const key = dateKey(d);
+      const isSelected = key === selectedDate;
+      const special = state.specialDays[key];
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.role = "tab";
+      btn.setAttribute("aria-selected", String(isSelected));
+      btn.dataset.dateKey = key;
+      btn.className = "flex flex-col items-center justify-center min-w-[60px] h-16 rounded-2xl flex-shrink-0 transition-colors " +
+        (isSelected
+          ? "bg-black text-white"
+          : special
+            ? "bg-indigo-50 text-indigo-700 border-2 border-indigo-300"
+            : "bg-white text-gray-500 border border-gray-200");
+      btn.innerHTML =
+        '<span class="text-xs font-medium">' + ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d.getDay()] + '</span>' +
+        '<span class="text-lg font-bold">' + d.getDate() + '</span>';
+      btn.addEventListener("click", () => {
+        selectedDate = key;
+        render();
+      });
+      dateSelector.appendChild(btn);
+    }
+
+    const specialLabel = state.specialDays[selectedDate];
+    const todayKey = dateKey(today);
+    headerTitle.textContent = specialLabel ? specialLabel : (selectedDate === todayKey ? "Today" : formatLong(selectedDate));
+  }
+
+  function formatLong(key) {
+    const [y, m, d] = key.split("-").map(Number);
+    const dt = new Date(y, m - 1, d);
+    return dt.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+  }
+
+  // ---------- Special day UI ----------
+  const specialBtn = document.getElementById("special-day-btn");
+  const specialUi = document.getElementById("special-day-ui");
+  const specialInput = document.getElementById("special-day-name");
+
+  specialBtn.addEventListener("click", () => {
+    const hidden = specialUi.classList.toggle("hidden");
+    specialBtn.setAttribute("aria-expanded", String(!hidden));
+    if (!hidden) {
+      specialInput.value = state.specialDays[selectedDate] || "";
+      specialInput.focus();
+    }
+  });
+
+  document.getElementById("special-day-save").addEventListener("click", () => {
+    const name = specialInput.value.trim();
+    if (!name) return;
+    state.specialDays[selectedDate] = name;
+    saveState();
+    specialUi.classList.add("hidden");
+    specialBtn.setAttribute("aria-expanded", "false");
+    render();
+    showToast("Special day saved");
+  });
+
+  document.getElementById("special-day-clear").addEventListener("click", () => {
+    delete state.specialDays[selectedDate];
+    saveState();
+    specialUi.classList.add("hidden");
+    render();
+  });
+
+  // ---------- Timetable ----------
+  const hourLabels = document.getElementById("hour-labels");
+  const grid = document.getElementById("timetable-grid");
+  const emptyState = document.getElementById("empty-state");
+  const numRows = END_HOUR - START_HOUR + 1;
+
+  function hourLabel(h) {
+    const period = h >= 12 ? "PM" : "AM";
+    let hr = h % 12;
+    if (hr === 0) hr = 12;
+    return hr + " " + period;
+  }
+
+  function renderTimetable() {
+    hourLabels.innerHTML = "";
+    grid.innerHTML = "";
+    grid.style.height = (numRows * ROW_H) + "px";
+
+    for (let i = 0; i < numRows; i++) {
+      const h = START_HOUR + i;
+      const labelWrap = document.createElement("div");
+      labelWrap.className = "text-xs text-gray-400 font-medium text-right pr-4";
+      labelWrap.style.height = ROW_H + "px";
+      labelWrap.textContent = hourLabel(h);
+      hourLabels.appendChild(labelWrap);
+
+      const line = document.createElement("div");
+      line.className = "absolute left-0 right-0 border-t border-gray-100";
+      line.style.top = (i * ROW_H) + "px";
+      grid.appendChild(line);
+    }
+
+    const tasks = tasksFor(selectedDate).slice().sort((a, b) => a.hour - b.hour);
+    emptyState.classList.toggle("hidden", tasks.length > 0);
+
+    tasks.forEach((task) => grid.appendChild(renderTaskCard(task)));
+  }
+
+  function renderTaskCard(task) {
+    const palette = COLORS[task.color] || COLORS.blue;
+    const top = (task.hour - START_HOUR) * ROW_H + 4;
+    const height = task.duration * ROW_H - 8;
+
+    const card = document.createElement("div");
+    card.className = "task-card rounded-2xl p-3 shadow-sm cursor-pointer " +
+      (task.status === "failed" ? "task-failed" : palette.bg);
+    card.style.top = top + "px";
+    card.style.height = Math.max(height, ROW_H - 8) + "px";
+    card.dataset.taskId = task.id;
+
+    const title = document.createElement("p");
+    title.className = "font-medium text-sm pr-8 " + (task.status === "failed" ? "" : palette.text) +
+      (task.status === "completed" ? " task-completed" : "");
+    title.textContent = task.title;
+    card.appendChild(title);
+
+    const time = document.createElement("p");
+    time.className = "task-time text-xs mt-0.5 " + (task.status === "failed" ? "" : palette.text + " opacity-60");
+    time.textContent = hourLabel(task.hour) + " · " + task.duration + "h";
+    card.appendChild(time);
+
+    card.addEventListener("click", (e) => {
+      if (e.target.closest(".drag-handle")) return;
+      openTaskModal(task.id);
+    });
+
+    if (task.reminder) {
+      const island = document.createElement("button");
+      island.type = "button";
+      island.className = "w-9 h-9 bg-black rounded-full dynamic-island flex-shrink-0 shadow-lg absolute";
+      island.style.top = "6px";
+      island.style.right = "6px";
+      island.setAttribute("aria-label", "Reminder: " + task.reminder);
+      island.innerHTML =
+        '<span class="w-9 h-9 flex items-center justify-center flex-shrink-0 text-white">' +
+        '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg></span>' +
+        '<span class="reminder-text text-white font-medium">' + escapeHtml(task.reminder) + '</span>';
+      island.addEventListener("click", (e) => {
+        e.stopPropagation();
+        toggleReminder(island);
+      });
+      card.appendChild(island);
+    }
+
+    // Drag-to-resize handle
+    const handle = document.createElement("div");
+    handle.className = "drag-handle";
+    handle.tabIndex = 0;
+    handle.setAttribute("role", "slider");
+    handle.setAttribute("aria-label", "Resize task duration");
+    handle.setAttribute("aria-valuenow", String(task.duration));
+    handle.setAttribute("aria-valuemin", "1");
+    handle.setAttribute("aria-valuemax", String(END_HOUR + 1 - task.hour));
+    attachResizeHandlers(handle, card, task);
+    card.appendChild(handle);
+
+    return card;
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement("div");
+    div.textContent = s;
+    return div.innerHTML;
+  }
+
+  function toggleReminder(island) {
+    const willExpand = !island.classList.contains("expanded");
+    island.classList.toggle("expanded");
+    if (willExpand) {
+      clearTimeout(island._collapseTimer);
+      island._collapseTimer = setTimeout(() => island.classList.remove("expanded"), 4000);
+    } else {
+      clearTimeout(island._collapseTimer);
+    }
+  }
+
+  // ---------- Drag-to-resize ----------
+  function attachResizeHandlers(handle, card, task) {
+    let startY = 0;
+    let startDuration = task.duration;
+    let dragging = false;
+
+    function maxDuration() {
+      return Math.max(1, END_HOUR + 1 - task.hour);
+    }
+
+    function onPointerMove(e) {
+      if (!dragging) return;
+      const deltaY = e.clientY - startY;
+      const deltaRows = Math.round(deltaY / ROW_H);
+      const newDuration = clamp(startDuration + deltaRows, 1, maxDuration());
+      card.style.height = (newDuration * ROW_H - 8) + "px";
+      handle.setAttribute("aria-valuenow", String(newDuration));
+      handle._pendingDuration = newDuration;
+    }
+
+    function onPointerUp() {
+      if (!dragging) return;
+      dragging = false;
+      card.classList.remove("resizing");
+      document.removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("pointerup", onPointerUp);
+      const finalDuration = handle._pendingDuration || startDuration;
+      if (finalDuration !== task.duration) {
+        task.duration = finalDuration;
+        saveState();
+        renderTimetable();
+      }
+    }
+
+    handle.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      dragging = true;
+      startY = e.clientY;
+      startDuration = task.duration;
+      card.classList.add("resizing");
+      document.addEventListener("pointermove", onPointerMove);
+      document.addEventListener("pointerup", onPointerUp);
+    });
+
+    // Keyboard access: arrow up/down resize by one hour
+    handle.addEventListener("keydown", (e) => {
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+      e.preventDefault();
+      const delta = e.key === "ArrowUp" ? -1 : 1;
+      task.duration = clamp(task.duration + delta, 1, maxDuration());
+      saveState();
+      renderTimetable();
+    });
+  }
+
+  function clamp(v, min, max) { return Math.min(Math.max(v, min), max); }
+
+  // ---------- Task options modal ----------
+  const modalOverlay = document.getElementById("modal-overlay");
+  const modalContent = document.getElementById("modal-content");
+  const modalTitle = document.getElementById("modal-title");
+  const modalSubtitle = document.getElementById("modal-subtitle");
+  const modalActions = document.getElementById("modal-actions");
+  const reschedulePanel = document.getElementById("reschedule-panel");
+  const rescheduleDate = document.getElementById("reschedule-date");
+
+  function currentTask() {
+    const tasks = tasksFor(selectedDate);
+    return tasks.find((t) => t.id === activeTaskId) || null;
+  }
+
+  function openTaskModal(taskId) {
+    activeTaskId = taskId;
+    const task = currentTask();
+    if (!task) return;
+    modalTitle.textContent = task.title;
+    modalSubtitle.textContent = hourLabel(task.hour) + " · " + task.duration + "h";
+    modalActions.classList.remove("hidden");
+    reschedulePanel.classList.add("hidden");
+    reschedulePanel.classList.remove("flex");
+    openOverlay(modalOverlay, modalContent);
+  }
+
+  function openOverlay(overlay, content) {
+    overlay.classList.remove("hidden");
+    requestAnimationFrame(() => {
+      overlay.classList.remove("opacity-0");
+      content.classList.remove("translate-y-full");
+    });
+  }
+
+  function closeOverlay(overlay, content) {
+    overlay.classList.add("opacity-0");
+    content.classList.add("translate-y-full");
+    setTimeout(() => overlay.classList.add("hidden"), 250);
+  }
+
+  modalActions.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-action]");
+    if (!btn) return;
+    const action = btn.dataset.action;
+    const task = currentTask();
+    if (!task) return;
+
+    if (action === "complete") {
+      task.status = "completed";
+      saveState(); render(); closeOverlay(modalOverlay, modalContent);
+      showToast("Marked completed");
+    } else if (action === "fail") {
+      task.status = "failed";
+      saveState(); render(); closeOverlay(modalOverlay, modalContent);
+      showToast("Marked as failed");
+    } else if (action === "reschedule") {
+      modalActions.classList.add("hidden");
+      reschedulePanel.classList.remove("hidden");
+      reschedulePanel.classList.add("flex");
+      rescheduleDate.value = selectedDate;
+      rescheduleDate.min = dateKey(new Date());
+    } else if (action === "delete") {
+      const list = tasksFor(selectedDate);
+      const idx = list.findIndex((t) => t.id === task.id);
+      if (idx > -1) list.splice(idx, 1);
+      saveState(); render(); closeOverlay(modalOverlay, modalContent);
+      showToast("Task deleted");
+    } else if (action === "close") {
+      closeOverlay(modalOverlay, modalContent);
+    }
+  });
+
+  reschedulePanel.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-action]");
+    if (!btn) return;
+    if (btn.dataset.action === "reschedule-cancel") {
+      reschedulePanel.classList.add("hidden");
+      reschedulePanel.classList.remove("flex");
+      modalActions.classList.remove("hidden");
+      return;
+    }
+    if (btn.dataset.action === "reschedule-confirm") {
+      const targetKey = rescheduleDate.value;
+      if (!targetKey) { showToast("Pick a date first"); return; }
+      const task = currentTask();
+      if (!task) return;
+      if (targetKey === selectedDate) { showToast("Already on that day"); return; }
+
+      const source = tasksFor(selectedDate);
+      const idx = source.findIndex((t) => t.id === task.id);
+      if (idx > -1) source.splice(idx, 1);
+      task.status = "pending";
+      tasksFor(targetKey).push(task);
+      saveState();
+      closeOverlay(modalOverlay, modalContent);
+      render();
+      showToast("Moved to " + formatLong(targetKey));
+    }
+  });
+
+  modalOverlay.addEventListener("click", (e) => {
+    if (e.target === modalOverlay) closeOverlay(modalOverlay, modalContent);
+  });
+
+  // ---------- Add task modal ----------
+  const addOverlay = document.getElementById("add-overlay");
+  const addContent = document.getElementById("add-content");
+  const addTitle = document.getElementById("new-title");
+  const addHour = document.getElementById("new-hour");
+  const addDuration = document.getElementById("new-duration");
+  const addReminder = document.getElementById("new-reminder");
+  let selectedColor = "blue";
+
+  for (let h = START_HOUR; h <= END_HOUR; h++) {
+    const opt = document.createElement("option");
+    opt.value = String(h);
+    opt.textContent = hourLabel(h);
+    addHour.appendChild(opt);
+  }
+
+  document.getElementById("add-task-btn").addEventListener("click", () => {
+    addTitle.value = "";
+    addReminder.value = "";
+    addDuration.value = "1";
+    selectedColor = "blue";
+    updateColorSwatches();
+    const now = new Date();
+    const defaultHour = clamp(now.getHours() + 1, START_HOUR, END_HOUR);
+    addHour.value = String(defaultHour);
+    openOverlay(addOverlay, addContent);
+    setTimeout(() => addTitle.focus(), 300);
+  });
+
+  document.getElementById("color-picker").addEventListener("click", (e) => {
+    const swatch = e.target.closest(".color-swatch");
+    if (!swatch) return;
+    selectedColor = swatch.dataset.color;
+    updateColorSwatches();
+  });
+
+  function updateColorSwatches() {
+    document.querySelectorAll(".color-swatch").forEach((el) => {
+      el.classList.toggle("ring-2", el.dataset.color === selectedColor);
+      el.classList.toggle("ring-offset-2", el.dataset.color === selectedColor);
+      el.classList.toggle(COLORS[el.dataset.color].ring, el.dataset.color === selectedColor);
+    });
+  }
+  updateColorSwatches();
+
+  document.getElementById("add-cancel").addEventListener("click", () => closeOverlay(addOverlay, addContent));
+  addOverlay.addEventListener("click", (e) => { if (e.target === addOverlay) closeOverlay(addOverlay, addContent); });
+
+  document.getElementById("add-save").addEventListener("click", () => {
+    const title = addTitle.value.trim();
+    if (!title) { addTitle.focus(); showToast("Give the task a title"); return; }
+    const hour = parseInt(addHour.value, 10);
+    const duration = clamp(parseInt(addDuration.value, 10), 1, END_HOUR + 1 - hour);
+
+    tasksFor(selectedDate).push({
+      id: uid(), hour, duration, title, color: selectedColor,
+      reminder: addReminder.value.trim(), status: "pending"
+    });
+    saveState();
+    closeOverlay(addOverlay, addContent);
+    render();
+    showToast("Task added");
+  });
+
+  // ---------- Collapsible header ----------
+  const timetableContainer = document.getElementById("timetable-container");
+  const header = document.getElementById("header");
+  timetableContainer.addEventListener("scroll", () => {
+    header.classList.toggle("header-collapsed", timetableContainer.scrollTop > 20);
+  }, { passive: true });
+
+  // ---------- Escape key closes any open overlay ----------
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (!modalOverlay.classList.contains("hidden")) closeOverlay(modalOverlay, modalContent);
+    if (!addOverlay.classList.contains("hidden")) closeOverlay(addOverlay, addContent);
+  });
+
+  // ---------- Render ----------
+  function render() {
+    renderDateSelector();
+    renderTimetable();
+  }
+
+  render();
+})();
+</script>
 </body>
 </html>
